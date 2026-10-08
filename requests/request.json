@@ -1,10 +1,8 @@
 {
- "id": "2026-10-08-xi-a",
- "thumb": 360,
- "articles": [
-  {"wiki": "en", "title": "Xi_Jinping", "limit": 14},
-  {"wiki": "en", "title": "Politburo_Standing_Committee_of_the_Chinese_Communist_Party", "limit": 6},
-  {"wiki": "en", "title": "National_People's_Congress", "limit": 8}
- ],
- "searches": [{"q": "Great Hall of the People Beijing exterior", "limit": 5}]
+ "id": "2026-10-08-xi-b",
+ "width": 1200,
+ "files": [
+  "File:Prime Minister Keir Starmer visits China (55066713683) (cropped+angle).jpg",
+  "File:The 1st Session of the 12th National People's Congress open 20130305.jpg"
+ ]
 }
