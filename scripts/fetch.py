@@ -1,8 +1,9 @@
 """Download free images from Wikimedia Commons for Bildningsresan.
 
-Reads requests/request.json and writes out/<id>/ with the image files and a
-manifest.json describing each one (caption, author, license, source page).
-Uses only the standard library, so the workflow needs no install step.
+Reads the request file given as the first argument and writes out/<id>/ with
+the image files and a manifest.json describing each one (caption, author,
+license, source page). Run it as: python3 scripts/fetch.py <request file>
+Uses only the standard library, so there is nothing to install.
 
 Request format (every key optional except "id"):
 {
