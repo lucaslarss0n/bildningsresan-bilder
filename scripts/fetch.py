@@ -8,8 +8,8 @@ Uses only the standard library, so there is nothing to install.
 Request format (every key optional except "id"):
 {
   "id": "2026-10-08-a",                      unique per request; names the output folder
-  "thumb": 360,                              width of candidate previews
-  "width": 1280,                             width of chosen files
+  "thumb": 360,                              width of candidate previews (rounded up to a standard width)
+  "width": 1280,                             width of chosen files (rounded up to a standard width)
   "articles": [{"wiki": "en", "title": "Xi_Jinping", "limit": 15}],
                                              images used in a Wikipedia article, as previews
   "searches": [{"q": "Great Hall of the People", "limit": 8}],
@@ -29,9 +29,27 @@ import urllib.request
 UA = "BildningsresanBot/1.0 (https://github.com/lucaslarss0n/bildningsresan-bilder)"
 COMMONS = "https://commons.wikimedia.org/w/api.php"
 KEEP_MIME = {"image/jpeg", "image/png", "image/webp", "image/svg+xml", "image/gif", "image/tiff"}
+# Wikimedia rate limits (429) thumbnails in other widths, so widths are rounded up to one of these.
+STANDARD_WIDTHS = [120, 250, 330, 500, 960, 1280, 1920, 3840]
+ORIGINAL_MAX_BYTES = 25_000_000  # largest original to download when a thumbnail is refused
 
 
-def get(url, binary=False, tries=3):
+def standard_width(w):
+    return next((s for s in STANDARD_WIDTHS if s >= w), STANDARD_WIDTHS[-1])
+
+
+BACKOFF = [10, 30, 60, 90]  # seconds; Commons rate limits (429) need long pauses
+
+
+def wait_for(e, n):
+    """Seconds to wait before retry n: Retry-After when the server gives one."""
+    after = getattr(e, "headers", None) and e.headers.get("Retry-After")
+    if after and after.strip().isdigit():
+        return min(int(after), 60)
+    return BACKOFF[min(n, len(BACKOFF) - 1)]
+
+
+def get(url, binary=False, tries=5):
     for n in range(tries):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": UA})
@@ -39,9 +57,12 @@ def get(url, binary=False, tries=3):
                 data = r.read()
             return data if binary else json.loads(data.decode("utf-8"))
         except Exception as e:  # noqa: BLE001 - retried, then reported
-            if n == tries - 1:
+            code = getattr(e, "code", None)
+            if n == tries - 1 or code in (400, 403, 404):
                 raise
-            time.sleep(2 + 3 * n)
+            delay = wait_for(e, n) if code in (429, 503) else 2 + 3 * n
+            print("retry in %ds after %s" % (delay, e), file=sys.stderr)
+            time.sleep(delay)
 
 
 def api(params):
@@ -91,6 +112,8 @@ def entry(title, page, caption=None):
         "width": ii.get("thumbwidth"),
         "height": ii.get("thumbheight"),
         "_url": ii.get("thumburl") or ii.get("url"),
+        "_orig": ii.get("url"),
+        "_bytes": ii.get("size") or 0,
     }
 
 
@@ -123,7 +146,8 @@ def search_files(q, limit):
 def main():
     req = json.load(open(sys.argv[1] if len(sys.argv) > 1 else "requests/request.json"))
     rid = re.sub(r"[^A-Za-z0-9_-]", "", str(req["id"]))
-    thumb, width = int(req.get("thumb", 360)), int(req.get("width", 1280))
+    thumb = standard_width(int(req.get("thumb", 360)))
+    width = standard_width(int(req.get("width", 1280)))
     outdir = os.path.join("out", rid)
     os.makedirs(outdir, exist_ok=True)
     manifest = {"id": rid, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "items": [], "errors": []}
@@ -161,16 +185,27 @@ def main():
             if key in seen or e["mime"] not in KEEP_MIME:
                 continue
             seen.add(key)
-            ext = ".png" if e["_url"].lower().endswith(".png") else ".jpg"
-            fname = "%s-%02d-%s%s" % (kind[0], len(manifest["items"]) + 1, slug(e["name"]), ext)
+            url, orig, size = e.pop("_url"), e.pop("_orig"), e.pop("_bytes")
             try:
-                data = get(e.pop("_url"), binary=True)
+                try:
+                    data = get(url, binary=True, tries=3)
+                except Exception:  # noqa: BLE001
+                    # Wikimedia sometimes refuses to render a new thumbnail; the original
+                    # file is served from cache, so take it when it is not too large.
+                    if (kind != "file" or not orig or orig == url or size > ORIGINAL_MAX_BYTES
+                            or e["mime"] in ("image/svg+xml", "image/tiff")):
+                        raise
+                    url, data = orig, get(orig, binary=True, tries=3)
+                    e.update(original=True, width=e["origWidth"], height=e["origHeight"])
+                ext = os.path.splitext(urllib.parse.urlparse(url).path)[1].lower()
+                ext = ext if ext in (".png", ".gif", ".webp", ".tif", ".tiff") else ".jpg"
+                fname = "%s-%02d-%s%s" % (kind[0], len(manifest["items"]) + 1, slug(e["name"]), ext)
                 open(os.path.join(outdir, fname), "wb").write(data)
                 e.update(kind=kind, source=source, path=fname, bytes=len(data))
                 manifest["items"].append(e)
             except Exception as ex:  # noqa: BLE001
                 manifest["errors"].append("download %s: %s" % (t, ex))
-            time.sleep(0.3)
+            time.sleep(1)
 
     json.dump(manifest, open(os.path.join(outdir, "manifest.json"), "w"), ensure_ascii=False, indent=1)
     print("%d items, %d errors" % (len(manifest["items"]), len(manifest["errors"])))
